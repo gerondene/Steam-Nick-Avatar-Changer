@@ -9,6 +9,7 @@
     python steam_nick.py --raw         дампнуть JSON профиля (для отладки)
 """
 import argparse
+import contextlib
 import html
 import io
 import json
@@ -228,6 +229,10 @@ def set_avatar(s, steamid: str, sid: str, path) -> bool:
 
 
 def avatar_files() -> list:
+    """Список картинок в папке avatars. Папку заводим сами: человек мог скачать
+    один exe, и ему некуда складывать файлы."""
+    with contextlib.suppress(OSError):
+        AVATARS.mkdir(exist_ok=True)
     if not AVATARS.is_dir():
         return []
     return sorted(p for p in AVATARS.iterdir() if p.suffix.lower() in IMG_TYPES)
@@ -237,9 +242,13 @@ def pick_preset(presets: list, index: int | None) -> str:
     if not presets:
         sys.exit("В config.json пустой presets.")
     if index is None:  # режим -c: следующий по кругу
-        prev = json.loads(STATE.read_text("utf-8")).get("i", -1) if STATE.exists() else -1
+        prev = -1
+        with contextlib.suppress(OSError, ValueError):  # битый или недоступный файл — не беда
+            if STATE.exists():
+                prev = json.loads(STATE.read_text("utf-8")).get("i", -1)
         index = (prev + 1) % len(presets)
-        STATE.write_text(json.dumps({"i": index}), "utf-8")
+        with contextlib.suppress(OSError):
+            STATE.write_text(json.dumps({"i": index}), "utf-8")
     if not 0 <= index < len(presets):
         sys.exit(f"Нет presets[{index}], их всего {len(presets)}.")
     return presets[index]

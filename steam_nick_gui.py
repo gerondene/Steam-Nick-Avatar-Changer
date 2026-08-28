@@ -350,8 +350,16 @@ class App(ctk.CTk):
             kill.grid(row=0, column=1, padx=(0, 2))
             self.rows += [pick, kill]
 
-    def save_cfg(self) -> None:
-        core.CONFIG.write_text(json.dumps(self.cfg, ensure_ascii=False, indent=2), "utf-8")
+    def save_cfg(self) -> bool:
+        """Пишем конфиг рядом с программой. Если папка только для чтения —
+        говорим об этом вслух, а не молча теряем настройки."""
+        try:
+            core.CONFIG.write_text(json.dumps(self.cfg, ensure_ascii=False, indent=2), "utf-8")
+            return True
+        except OSError as e:
+            self.say(f"Не смог записать {core.CONFIG.name}: {e.strerror or e}. "
+                     "Перенеси программу в папку, куда разрешена запись.", bad=True)
+            return False
 
     # ---------- аватарки ----------
     def _image(self, source, side: int):
@@ -435,12 +443,16 @@ class App(ctk.CTk):
             return
         nick, was, tab = self.entry.get().strip(), self.now.cget("text"), self.tabs.get()
         self.cfg["theme"] = name
-        self.save_cfg()
+        saved = self.save_cfg()
         self.t = THEMES[name]
         ctk.set_appearance_mode(self.t["mode"])
         self.build(keep_nick=nick, tab=tab)
         self.now.configure(text=was)
-        self.say(f"Оформление: {name}")
+        if saved:
+            self.say(f"Оформление: {name}")
+        else:
+            self.say(f"Тема применена, но {core.CONFIG.name} не записался — "
+                     "после перезапуска вернётся прежняя.", bad=True)
 
     def connect(self) -> None:
         if not self.cfg.get("steam_login_secure"):
@@ -498,13 +510,17 @@ class App(ctk.CTk):
         if name in presets:
             return self.say("Такой пресет уже есть.", bad=True)
         presets.append(name)
-        self.save_cfg()
+        if not self.save_cfg():
+            presets.remove(name)  # на диск не легло — не делаем вид, что легло
+            return
         self.fill()
         self.say(f"«{name}» в пресетах.")
 
     def del_preset(self, name: str) -> None:
         self.cfg["presets"].remove(name)
-        self.save_cfg()
+        if not self.save_cfg():
+            self.cfg["presets"].append(name)
+            return self.fill()
         self.fill()
         self.say(f"«{name}» убран.")
 
@@ -513,7 +529,8 @@ class App(ctk.CTk):
         if not value:
             return self.say("Поле токена пустое.", bad=True)
         self.cfg["steam_login_secure"] = value
-        self.save_cfg()
+        if not self.save_cfg():
+            return
         self.eye.deselect()
         self._toggle_eye()
         self.say("Токен сохранён, проверяю…")
