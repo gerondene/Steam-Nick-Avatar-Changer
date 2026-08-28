@@ -211,6 +211,7 @@ class App(ctk.CTk):
         self.entry.grid(row=0, column=0, sticky="ew")
         self.entry.bind("<Return>", lambda _: self.change(self.entry.get().strip()))
         self.entry.bind("<KeyRelease>", self._count)
+        self._hotkeys(self.entry)
         self.count = ctk.CTkLabel(line, text="0/32", width=44, text_color=self.t["muted"],
                                   font=self.font(11))
         self.count.grid(row=0, column=1, padx=(6, 0))
@@ -261,16 +262,26 @@ class App(ctk.CTk):
                                    border_color=t["muted"], font=self.font(11),
                                    command=self._toggle_eye)
         self.eye.grid(row=0, column=1, sticky="e")
-        self.token = self.field(p, show="•", placeholder_text="76561198…%7C%7CeyJ0eXAi…")
-        self.token.grid(row=1, column=0, sticky="ew", padx=6)
+        line = ctk.CTkFrame(p, fg_color="transparent")
+        line.grid(row=1, column=0, sticky="ew", padx=6)
+        line.grid_columnconfigure(0, weight=1)
+        self.token = self.field(line, show="•", placeholder_text="76561198…%7C%7CeyJ0eXAi…")
+        self.token.grid(row=0, column=0, sticky="ew")
         self.token.insert(0, self.cfg.get("steam_login_secure", ""))
+        self._hotkeys(self.token)
+        self.b_paste = self.btn(line, "Вставить", self.paste_token, width=84, height=38)
+        self.b_paste.grid(row=0, column=1, padx=(6, 0))
         self.b_token = self.btn(p, "Сохранить и переподключиться", self.save_token, height=36)
         self.b_token.grid(row=2, column=0, sticky="ew", padx=6, pady=(8, 6))
         ctk.CTkLabel(p, text="Берётся в браузере: F12 → Application → Cookies → "
                             "steamcommunity.com → steamLoginSecure. Это ключ от сессии "
                             "аккаунта, никому его не показывай.",
                      text_color=t["muted"], anchor="w", font=self.font(10), wraplength=380,
-                     justify="left").grid(row=3, column=0, sticky="ew", padx=6, pady=(0, 10))
+                     justify="left").grid(row=3, column=0, sticky="ew", padx=6, pady=(0, 6))
+        self.b_appdir = self.btn(p, f"Настройки лежат в {core.APP_DIR.name} — открыть",
+                                 self.open_app_dir, height=30)
+        self.b_appdir.configure(font=self.font(10))
+        self.b_appdir.grid(row=4, column=0, sticky="ew", padx=6, pady=(0, 10))
 
     def _footer(self) -> None:
         t = self.t
@@ -298,11 +309,47 @@ class App(ctk.CTk):
     def _toggle_eye(self) -> None:
         self.token.configure(show="" if self.eye.get() else "•")
 
+    def _clip(self, widget, action: str):
+        """Ctrl+C/V/X/A своими руками.
+
+        Tk ставит штатные сочетания на keysym, а при русской раскладке под
+        Ctrl+V приходит Cyrillic_em — событие <<Paste>> не срабатывает вовсе.
+        Поэтому смотрим на keycode физической клавиши, он от раскладки
+        не зависит."""
+        inner = getattr(widget, "_entry", widget)
+        if action == "paste":
+            try:
+                text = self.clipboard_get()
+            except Exception:
+                return "break"
+            with contextlib.suppress(Exception):
+                inner.delete("sel.first", "sel.last")
+            inner.insert("insert", "".join(text.split()))  # токен копируют с переносами
+        elif action == "all":
+            inner.select_range(0, "end")
+            inner.icursor("end")
+        else:  # copy / cut
+            with contextlib.suppress(Exception):
+                self.clipboard_clear()
+                self.clipboard_append(inner.selection_get())
+                if action == "cut":
+                    inner.delete("sel.first", "sel.last")
+        return "break"
+
+    def _hotkeys(self, widget) -> None:
+        keys = {86: "paste", 67: "copy", 88: "cut", 65: "all"}
+
+        def handler(event, w=widget):
+            action = keys.get(event.keycode)
+            return self._clip(w, action) if action else None
+
+        widget.bind("<Control-KeyPress>", handler)
+
     def busy(self, on: bool, text: str = "") -> None:
         state = "disabled" if on else "normal"
         for w in (self.b_refresh, self.b_cycle, self.b_set, self.b_add, self.b_token,
-                  self.b_pick, self.b_folder, self.b_rescan, self.entry, self.token,
-                  self.picker, *self.rows, *self.abtns):
+                  self.b_pick, self.b_folder, self.b_rescan, self.b_paste, self.b_appdir,
+                  self.entry, self.token, self.picker, *self.rows, *self.abtns):
             w.configure(state=state)
         if text:
             self.status.configure(text=text, text_color=self.t["muted"])
@@ -432,10 +479,24 @@ class App(ctk.CTk):
             self.upload(path)
 
     def open_folder(self) -> None:
-        core.AVATARS.mkdir(exist_ok=True)
+        core.prepare_dirs()
         with contextlib.suppress(OSError, AttributeError):
             os.startfile(core.AVATARS)
         self.say(f"Папка открыта: {core.AVATARS}")
+
+    def open_app_dir(self) -> None:
+        core.prepare_dirs()
+        with contextlib.suppress(OSError, AttributeError):
+            os.startfile(core.APP_DIR)
+        self.say(str(core.APP_DIR))
+
+    def paste_token(self) -> None:
+        """Кнопка на случай, если Ctrl+V всё-таки не дошёл."""
+        self.token.delete(0, "end")
+        self._clip(self.token, "paste")
+        value = self.token.get().strip()
+        self.say(f"Вставлено {len(value)} символов." if value
+                 else "В буфере обмена пусто.", bad=not value)
 
     # ---------- действия ----------
     def set_theme(self, name: str) -> None:

@@ -13,8 +13,10 @@ import contextlib
 import html
 import io
 import json
+import os
 import re
 import secrets
+import shutil
 import sys
 from pathlib import Path
 
@@ -28,22 +30,59 @@ except ImportError:
     sys.exit("Нужен requests:  pip install requests")
 
 BASE = "https://steamcommunity.com"
-# В собранном exe __file__ указывает внутрь распакованного временного каталога,
-# поэтому конфиг и аватарки ищем рядом с самим exe.
+# Папка, откуда запущена программа: в собранном exe __file__ ведёт внутрь
+# временного каталога распаковки, поэтому смотрим на сам exe.
 HERE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
-CONFIG = HERE / "config.json"
-STATE = HERE / ".state.json"
-AVATARS = HERE / "avatars"          # папка с картинками для быстрой смены
+# Данные держим не рядом с exe: его качают в «Загрузки», а оттуда файлы легко
+# потерять вместе с уборкой папки. Стандартное место для настроек — AppData.
+_ROAMING = os.environ.get("APPDATA")
+APP_DIR = Path(_ROAMING) / "SteamNick" if _ROAMING else Path.home() / ".steam-nick"
+CONFIG = APP_DIR / "config.json"
+STATE = APP_DIR / "state.json"
+BACKUP = APP_DIR / "profile-backup.json"
+AVATARS = APP_DIR / "avatars"       # папка с картинками для быстрой смены
 MAX_AVATAR = 1024 * 1024           # лимит Steam на файл аватара
 IMG_TYPES = {".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png", ".gif": "gif"}
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 
+def prepare_dirs() -> None:
+    with contextlib.suppress(OSError):
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        AVATARS.mkdir(exist_ok=True)
+
+
+def migrate(old: Path = HERE) -> list:
+    """Разовый перенос настроек из папки программы в APP_DIR."""
+    prepare_dirs()
+    moved = []
+    for src, dst in ((old / "config.json", CONFIG),
+                     (old / ".state.json", STATE),
+                     (old / "profile-backup.json", BACKUP)):
+        if src.is_file() and not dst.exists():
+            with contextlib.suppress(OSError):
+                shutil.move(str(src), str(dst))
+                moved.append(dst.name)
+    old_avatars = old / "avatars"
+    if old_avatars.is_dir() and old_avatars != AVATARS:
+        for pic in old_avatars.iterdir():
+            if pic.suffix.lower() in IMG_TYPES and not (AVATARS / pic.name).exists():
+                with contextlib.suppress(OSError):
+                    shutil.move(str(pic), str(AVATARS / pic.name))
+                    moved.append(pic.name)
+        with contextlib.suppress(OSError):
+            old_avatars.rmdir()  # уйдёт, только если опустела
+    return moved
+
+
+migrate()
+
+
 def load_config() -> dict:
     if not CONFIG.exists():
-        sys.exit(f"Нет {CONFIG.name} — скопируй config.example.json в config.json "
-                 "и вставь cookie steamLoginSecure.")
+        sys.exit(f"Нет настроек в {CONFIG} — открой окно (SteamNick.exe или "
+                 "steam_nick_gui.py) и вставь токен на вкладке «Токен».")
     cfg = json.loads(CONFIG.read_text("utf-8"))
     if not cfg.get("steam_login_secure"):
         sys.exit("В config.json пустой steam_login_secure.")
@@ -128,9 +167,11 @@ def set_name(s, steamid: str, sid: str, name: str, light: bool = False) -> bool:
 
     before = profile_data(s, steamid)
     flat = flatten(before)
-    backup = HERE / "profile-backup.json"
+    backup = BACKUP
     if not backup.exists():  # страховка на случай, если Steam что-то затрёт
-        backup.write_text(json.dumps(before, ensure_ascii=False, indent=2), "utf-8")
+        prepare_dirs()
+        with contextlib.suppress(OSError):
+            backup.write_text(json.dumps(before, ensure_ascii=False, indent=2), "utf-8")
 
     if light:
         url = f"{BASE}/actions/PersonaNameEdit"
