@@ -1,0 +1,16 @@
+# личное — токен сессии Steam, в репозиторий не попадает
+config.json
+config.local.json
+profile-backup.json
+.state.json
+
+# свои картинки — папку оставляем, содержимое нет
+avatars/*
+!avatars/.gitkeep
+
+# сборка
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
